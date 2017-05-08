@@ -54,6 +54,19 @@ __yellow(){
         printf '\033[0m'
     fi
 }
+function __debug(){
+    echo "[`date`] $1"
+}
+
+cert_dir="/etc/ssl.cert"
+key_file=$cert_dir/key.pem
+ca_file=$cert_dir/ca.pem    
+cert_file=$cert_dir/cert.pem
+fullchain_file=$cert_dir/fullchain.pem
+__debug "copy the ca cert files to current dir, the one-key-ikev2.sh will be used latter. "
+cp -f $key_file ~/server.pem
+cp -f $ca_file ~/ca.cert.pem
+cp -f $cert_file ~/server.cert.pem
 
 # Install IKEV2
 function install_ikev2(){
@@ -73,6 +86,19 @@ function install_ikev2(){
     iptables_check
     ipsec restart
     success_info
+}
+
+#check the gloable variable, install silence?
+function check_out_value_setting(){
+    if [ ! -z $__OUTVAR_DOMAIN ]; then
+        debug "[INFO] the variable OUT_DOMAIN:$__OUTVAR_DOMAIN will be used."
+    fi
+    if [ ! -z $__OUTVAR_VPSTYPE]; then
+        debug "[INFO] the variable __OUTVAR_VPSTYPE:$__OUTVAR_VPSTYPE will be used."
+    fi
+    if [ ! -z $__OUTVAR_NETCARD ]; then 
+         debug "[INFO] the variable __OUTVAR_NETCARD:$__OUTVAR_NETCARD will be used."
+    fi
 }
 
 # Make sure only root can run our script
@@ -136,7 +162,8 @@ function pre_install(){
     echo "# Version:$VER"
     echo "#############################################################"
     echo "please choose the type of your VPS(Xen、KVM: 1  ,  OpenVZ: 2):"
-    read -p "your choice(1 or 2):" os_choice
+    os_choice=1;
+    #read -p "your choice(1 or 2):" os_choice
     if [ "$os_choice" = "1" ]; then
         os="1"
         os_str="Xen、KVM"
@@ -150,13 +177,15 @@ function pre_install(){
             fi
     fi
     echo "please input the ip (or domain) of your VPS:"
-    read -p "ip or domain(default_value:${IP}):" vps_ip
+    vps_ip="adusir.net"
+    # read -p "ip or domain(default_value:${IP}):" vps_ip
     if [ "$vps_ip" = "" ]; then
         vps_ip=$IP
     fi
 
     echo "Would you want to import existing cert? You NEED copy your cert file to the same directory of this script"
-    read -p "yes or no?(default_value:no):" have_cert
+    # read -p "yes or no?(default_value:no):" have_cert
+    have_cert="yes"
     if [ "$have_cert" = "yes" ]; then
         have_cert="1"
     else
@@ -333,78 +362,30 @@ function create_cert(){
 # configure the ipsec.conf
 function configure_ipsec(){
  cat > /usr/local/etc/ipsec.conf<<-EOF
+# ipsec.conf - strongSwan IPsec configuration file
 config setup
-    uniqueids=never 
-
-conn iOS_cert
-    keyexchange=ikev1
-    fragmentation=yes
-    left=%defaultroute
-    leftauth=pubkey
-    leftsubnet=0.0.0.0/0
-    leftcert=server.cert.pem
-    right=%any
-    rightauth=pubkey
-    rightauth2=xauth
-    rightsourceip=10.31.2.0/24
-    rightcert=client.cert.pem
-    auto=add
-
-conn android_xauth_psk
-    keyexchange=ikev1
-    left=%defaultroute
-    leftauth=psk
-    leftsubnet=0.0.0.0/0
-    right=%any
-    rightauth=psk
-    rightauth2=xauth
-    rightsourceip=10.31.2.0/24
-    auto=add
-
-conn networkmanager-strongswan
+    uniqueids=never
+conn %default
     keyexchange=ikev2
-    left=%defaultroute
-    leftauth=pubkey
-    leftsubnet=0.0.0.0/0
-    leftcert=server.cert.pem
-    right=%any
-    rightauth=pubkey
-    rightsourceip=10.31.2.0/24
-    rightcert=client.cert.pem
-    auto=add
-
-conn ios_ikev2
-    keyexchange=ikev2
-    ike=aes256-sha256-modp2048,3des-sha1-modp2048,aes256-sha1-modp2048!
+    ike=aes256-sha256-modp2048,3des-sha1-modp2048,aes256-sha1-modp2048,aes256-sha1-modp1024!
     esp=aes256-sha256,3des-sha1,aes256-sha1!
-    rekey=no
     left=%defaultroute
-    leftid=${vps_ip}
-    leftsendcert=always
-    leftsubnet=0.0.0.0/0
-    leftcert=server.cert.pem
-    right=%any
-    rightauth=eap-mschapv2
-    rightsourceip=10.31.2.0/24
-    rightsendcert=never
-    eap_identity=%any
-    dpdaction=clear
-    fragmentation=yes
-    auto=add
-
-conn windows7
-    keyexchange=ikev2
-    ike=aes256-sha1-modp1024!
-    rekey=no
-    left=%defaultroute
+    leftid=adusir.net
     leftauth=pubkey
     leftsubnet=0.0.0.0/0
     leftcert=server.cert.pem
     right=%any
+    eap_identity=%any
+    rekey=no
+    rightsendcert=never
     rightauth=eap-mschapv2
     rightsourceip=10.31.2.0/24
-    rightsendcert=never
-    eap_identity=%any
+conn ios_ikev2
+    leftsendcert=always
+    fragmentation=yes
+    auto=add
+conn windows7
+    leftsendcert=never
     auto=add
 
 EOF
@@ -422,8 +403,14 @@ function configure_strongswan(){
         }
         dns1 = 8.8.8.8
         dns2 = 8.8.4.4
-        nbns1 = 8.8.8.8
-        nbns2 = 8.8.4.4
+        filelog {
+            /var/log/strongswan.charon.log {
+                time_format = %b %e %T
+                default = 2
+                append = no
+                flush_line = yes
+            }
+        }
 }
 include strongswan.d/*.conf
 EOF
@@ -433,15 +420,14 @@ EOF
 function configure_secrets(){
     cat > /usr/local/etc/ipsec.secrets<<-EOF
 : RSA server.pem
-: PSK "myPSKkey"
-: XAUTH "myXAUTHPass"
-myUserName %any : EAP "myUserPass"
+adusir : EAP "1234@1234"
 EOF
 }
 
 function SNAT_set(){
     echo "Use SNAT could implove the speed,but your server MUST have static ip address."
-    read -p "yes or no?(default_value:no):" use_SNAT
+    # read -p "yes or no?(default_value:no):" use_SNAT
+    use_SNAT="yes"
     if [ "$use_SNAT" = "yes" ]; then
         use_SNAT_str="1"
         echo -e "$(__yellow "ip address info:")"
@@ -463,7 +449,8 @@ net.ipv4.ip_forward=1
 EOF
     sysctl --system
     echo "Do you use firewall in CentOS7 instead of iptables?"
-    read -p "yes or no?(default_value:no):" use_firewall
+    # read -p "yes or no?(default_value:no):" use_firewall
+    use_firewall="no"
     if [ "$use_firewall" = "yes" ]; then
         firewall_set
     else
@@ -490,28 +477,20 @@ function iptables_set(){
     echo "The above content is the network card information of your VPS."
     echo "[$(__yellow "Important")]Please enter the name of the interface which can be connected to the public network."
     if [ "$os" = "1" ]; then
-            read -p "Network card interface(default_value:eth0):" interface
+            # read -p "Network card interface(default_value:eth0):" interface
+            interface="eth1"
         if [ "$interface" = "" ]; then
             interface="eth0"
         fi
         iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-        iptables -A FORWARD -s 10.31.0.0/24  -j ACCEPT
-        iptables -A FORWARD -s 10.31.1.0/24  -j ACCEPT
         iptables -A FORWARD -s 10.31.2.0/24  -j ACCEPT
         iptables -A INPUT -i $interface -p esp -j ACCEPT
         iptables -A INPUT -i $interface -p udp --dport 500 -j ACCEPT
-        iptables -A INPUT -i $interface -p tcp --dport 500 -j ACCEPT
         iptables -A INPUT -i $interface -p udp --dport 4500 -j ACCEPT
-        iptables -A INPUT -i $interface -p udp --dport 1701 -j ACCEPT
-        iptables -A INPUT -i $interface -p tcp --dport 1723 -j ACCEPT
         #iptables -A FORWARD -j REJECT
         if [ "$use_SNAT_str" = "1" ]; then
-            iptables -t nat -A POSTROUTING -s 10.31.0.0/24 -o $interface -j SNAT --to-source $static_ip
-            iptables -t nat -A POSTROUTING -s 10.31.1.0/24 -o $interface -j SNAT --to-source $static_ip
             iptables -t nat -A POSTROUTING -s 10.31.2.0/24 -o $interface -j SNAT --to-source $static_ip
         else
-            iptables -t nat -A POSTROUTING -s 10.31.0.0/24 -o $interface -j MASQUERADE
-            iptables -t nat -A POSTROUTING -s 10.31.1.0/24 -o $interface -j MASQUERADE
             iptables -t nat -A POSTROUTING -s 10.31.2.0/24 -o $interface -j MASQUERADE
         fi
     else
@@ -520,23 +499,14 @@ function iptables_set(){
             interface="venet0"
         fi
         iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-        iptables -A FORWARD -s 10.31.0.0/24  -j ACCEPT
-        iptables -A FORWARD -s 10.31.1.0/24  -j ACCEPT
         iptables -A FORWARD -s 10.31.2.0/24  -j ACCEPT
         iptables -A INPUT -i $interface -p esp -j ACCEPT
         iptables -A INPUT -i $interface -p udp --dport 500 -j ACCEPT
-        iptables -A INPUT -i $interface -p tcp --dport 500 -j ACCEPT
         iptables -A INPUT -i $interface -p udp --dport 4500 -j ACCEPT
-        iptables -A INPUT -i $interface -p udp --dport 1701 -j ACCEPT
-        iptables -A INPUT -i $interface -p tcp --dport 1723 -j ACCEPT
         #iptables -A FORWARD -j REJECT
         if [ "$use_SNAT_str" = "1" ]; then
-            iptables -t nat -A POSTROUTING -s 10.31.0.0/24 -o $interface -j SNAT --to-source $static_ip
-            iptables -t nat -A POSTROUTING -s 10.31.1.0/24 -o $interface -j SNAT --to-source $static_ip
             iptables -t nat -A POSTROUTING -s 10.31.2.0/24 -o $interface -j SNAT --to-source $static_ip
         else
-            iptables -t nat -A POSTROUTING -s 10.31.0.0/24 -o $interface -j MASQUERADE
-            iptables -t nat -A POSTROUTING -s 10.31.1.0/24 -o $interface -j MASQUERADE
             iptables -t nat -A POSTROUTING -s 10.31.2.0/24 -o $interface -j MASQUERADE
         fi
     fi
