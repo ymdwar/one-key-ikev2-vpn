@@ -482,6 +482,12 @@ function iptables_set(){
         if [ "$interface" = "" ]; then
             interface="eth0"
         fi
+        systemctl stop firewalld.service #停止firewall
+        systemctl disable firewalld.service #禁止firewall开机启动
+        yum install iptables-services #安装
+        systemctl enable iptables.service
+        systemctl restart iptables.service
+        
         iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
         iptables -A FORWARD -s 10.31.2.0/24  -j ACCEPT
         iptables -A INPUT -i $interface -p esp -j ACCEPT
